@@ -8,6 +8,7 @@ purposes.
 from .exact_time_evolution import *
 from .time_evolution import *
 from .tdvp import *
+from .tdvp_algorithms.cbe_onesitetdvp import *
 from .tdvp_algorithms.firstorderonesite import *
 from .tdvp_algorithms.secondorderonesite import *
 from .tdvp_algorithms.secondordertwosite import *
