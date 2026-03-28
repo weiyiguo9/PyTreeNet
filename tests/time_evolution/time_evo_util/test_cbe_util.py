@@ -12,6 +12,7 @@ from pytreenet.contractions.sandwich_caching import SandwichCache
 from pytreenet.contractions.state_operator_contraction import contract_ket_ham_with_envs
 from pytreenet.random import random_hermitian_matrix, random_small_ttns
 from pytreenet.time_evolution.time_evo_util.cbe_util import (
+    compute_enrichment_from_predictor,
     compute_enrichment_tensor,
     dematricize_along_leg,
     matricize_along_leg,
@@ -63,6 +64,22 @@ class TestCBEUtil(unittest.TestCase):
         overlap = a_mat.conj().T @ b_mat
         np.testing.assert_allclose(overlap, np.zeros_like(overlap), atol=1e-10)
         self.assertLessEqual(b_mat.shape[1], 3)
+
+    def test_compute_enrichment_from_predictor_supports_different_bond_leg_index(self):
+        rng = np.random.default_rng(4321)
+        site_tensor = rng.normal(size=(3, 1, 2)) + 1j * rng.normal(size=(3, 1, 2))
+        predictor_tensor = rng.normal(size=(2, 3, 2)) + 1j * rng.normal(size=(2, 3, 2))
+        enrichment = compute_enrichment_from_predictor(site_tensor,
+                                                       predictor_tensor,
+                                                       bond_leg=1,
+                                                       predictor_bond_leg=0,
+                                                       d_tilde_max=2,
+                                                       enrichment_rel_tol=1e-14,
+                                                       enrichment_total_tol=1e-14)
+        self.assertIsNotNone(enrichment)
+        self.assertEqual(enrichment.shape[0], 3)
+        self.assertEqual(enrichment.shape[2], 2)
+        self.assertLessEqual(enrichment.shape[1], 2)
 
     def test_contract_ket_ham_action_matches_effective_hamiltonian_action(self):
         conversion_dict = {

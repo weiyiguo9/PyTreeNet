@@ -13,16 +13,17 @@ from .tdvp_algorithm import TDVPConfig
 from ...contractions.state_operator_contraction import (
     contract_bra_tensor_ignore_one_leg,
     contract_ket_ham_ignoring_one_leg,
-    contract_ket_ham_with_envs,
 )
 from ...core.leg_specification import LegSpecification
 from ...util.tensor_splitting import SVDParameters, truncate_singular_values
 from ...util.ttn_exceptions import NoConnectionException
 from ..time_evo_util.cbe_util import (
-    compute_enrichment_tensor,
+    compute_enrichment_from_predictor,
     dematricize_along_leg,
     matricize_along_leg,
 )
+from ..time_evolution import EvoDirection
+from ..time_evo_util.effective_time_evolution import two_site_time_evolution
 
 __all__ = [
     "CBEOneSiteTDVPConfig",
@@ -82,19 +83,54 @@ class CBEOneSiteTDVPMixin:
         )
         self.partial_tree_cache.add_entry(node_id, next_node_id, new_tensor)
 
-    def _compute_ham_action_on_site(self, node_id: str) -> np.ndarray:
+    @staticmethod
+    def create_two_site_predictor_id(node_id: str, next_node_id: str) -> str:
         """
-        Compute the local Hamiltonian action H_eff|A> for a site tensor.
+        Create the identifier for a temporary two-site predictor tensor.
         """
-        state_node, state_tensor = self.state[node_id]
-        ham_node, ham_tensor = self.hamiltonian[node_id]
-        return contract_ket_ham_with_envs(state_node,
-                                          state_tensor,
-                                          ham_node,
-                                          ham_tensor,
-                                          self.partial_tree_cache)
+        return "TwoSitePredict_" + node_id + "_contr_" + next_node_id
 
-    def _compute_enrichment(self, node_id: str, next_node_id: str) -> np.ndarray | None:
+    def _predict_site_tensor_two_site(self,
+                                      node_id: str,
+                                      next_node_id: str,
+                                      time_step_factor: float = 1) -> tuple[np.ndarray, int]:
+        """
+        Build a local two-site predictor and split it back to the active site.
+
+        This reuses the existing two-site TDVP evolution utility on a temporary
+        copy of the state and cache so the main sweep state remains untouched.
+        """
+        state_tmp = deepcopy(self.state)
+        cache_tmp = deepcopy(self.partial_tree_cache)
+        u_legs, v_legs = state_tmp.legs_before_combination(node_id,
+                                                           next_node_id)
+        predictor_id = self.create_two_site_predictor_id(node_id, next_node_id)
+        predicted_two_site_tensor = two_site_time_evolution(
+            node_id,
+            next_node_id,
+            predictor_id,
+            state_tmp,
+            self.hamiltonian,
+            time_step_factor * self.time_step_size,
+            cache_tmp,
+            forward=EvoDirection.FORWARD,
+            mode=self.config.time_evo_mode,
+            solver_options=self.solver_options,
+        )
+        state_tmp.tensors[predictor_id] = predicted_two_site_tensor
+        state_tmp.split_node_svd(predictor_id,
+                                 u_legs,
+                                 v_legs,
+                                 u_identifier=node_id,
+                                 v_identifier=next_node_id,
+                                 svd_params=self.config)
+        predictor_bond_leg = state_tmp.nodes[node_id].neighbour_index(next_node_id)
+        return state_tmp.tensors[node_id], predictor_bond_leg
+
+    def _compute_enrichment(self,
+                            node_id: str,
+                            next_node_id: str,
+                            time_step_factor: float = 1) -> np.ndarray | None:
         """
         Compute tangent-space enrichment for the active bond.
         """
@@ -105,17 +141,22 @@ class CBEOneSiteTDVPMixin:
         node = self.state.nodes[node_id]
         bond_leg = node.neighbour_index(next_node_id)
         site_tensor = self.state.tensors[node_id]
-        ham_action_tensor = self._compute_ham_action_on_site(node_id)
+        predictor_tensor, predictor_bond_leg = self._predict_site_tensor_two_site(
+            node_id,
+            next_node_id,
+            time_step_factor,
+        )
 
         max_addable = self.config.max_bond_dim - current_dim
         d_tilde_max = min(self.config.d_tilde_max, max_addable)
         if d_tilde_max <= 0:
             return None
 
-        return compute_enrichment_tensor(
+        return compute_enrichment_from_predictor(
             site_tensor,
-            ham_action_tensor,
+            predictor_tensor,
             bond_leg,
+            predictor_bond_leg,
             d_tilde_max=d_tilde_max,
             enrichment_rel_tol=self.config.enrichment_rel_tol,
             enrichment_total_tol=self.config.enrichment_total_tol,
@@ -203,7 +244,9 @@ class CBEOneSiteTDVPMixin:
         """
         assert self.state.orthogonality_center_id == node_id
         if self.config.enrichment_enabled:
-            enrichment = self._compute_enrichment(node_id, next_node_id)
+            enrichment = self._compute_enrichment(node_id,
+                                                  next_node_id,
+                                                  time_step_factor=time_step_factor)
             self._split_updated_site_cbe(node_id, next_node_id, enrichment)
         else:
             self._split_updated_site(node_id, next_node_id)

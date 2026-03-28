@@ -223,6 +223,7 @@ class TestCBEOneSiteTDVP(unittest.TestCase):
             total_tol=0.0,
             enrichment_rel_tol=0.0,
             enrichment_total_tol=0.0,
+            record_max_bdim=True,
         )
         algo = ptn.SecondOrderCBEOneSiteTDVP(
             state,
@@ -243,6 +244,7 @@ class TestCBEOneSiteTDVP(unittest.TestCase):
         self.assertTrue(algo.state.is_in_canonical_form(
             algo.state.orthogonality_center_id
         ))
+        self.assertGreater(max(algo.state.bond_dims().values()), 1)
 
 
 if __name__ == "__main__":

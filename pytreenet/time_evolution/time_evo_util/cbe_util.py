@@ -102,13 +102,48 @@ def compute_enrichment_tensor(site_tensor: np.ndarray,
             f"Found {site_tensor.shape} and {ham_action_tensor.shape}."
         )
         raise ValueError(errstr)
+    return compute_enrichment_from_predictor(site_tensor,
+                                             ham_action_tensor,
+                                             bond_leg,
+                                             None,
+                                             d_tilde_max,
+                                             enrichment_rel_tol,
+                                             enrichment_total_tol)
+
+
+def compute_enrichment_from_predictor(site_tensor: np.ndarray,
+                                      predictor_tensor: np.ndarray,
+                                      bond_leg: int,
+                                      predictor_bond_leg: int | None,
+                                      d_tilde_max: int,
+                                      enrichment_rel_tol: float,
+                                      enrichment_total_tol: float
+                                      ) -> np.ndarray | None:
+    """
+    Compute enrichment directions from a predictor tensor.
+
+    The predictor tensor must have the same non-bond leg dimensions and leg
+    order as ``site_tensor`` but may have a different size along ``bond_leg``.
+    This is useful when the predictor comes from a two-site pre-evolution that
+    already opened a larger bond space.
+    """
     max_rank = int(d_tilde_max)
     if max_rank <= 0:
         return None
 
+    if predictor_bond_leg is None:
+        predictor_bond_leg = bond_leg
     a_matrix, _ = matricize_along_leg(site_tensor, bond_leg)
-    ha_matrix, _ = matricize_along_leg(ham_action_tensor, bond_leg)
+    predictor_matrix, _ = matricize_along_leg(predictor_tensor,
+                                              predictor_bond_leg)
     d_rest, d_bond = a_matrix.shape
+    pred_rest, _ = predictor_matrix.shape
+    if pred_rest != d_rest:
+        errstr = (
+            "Predictor tensor must match site_tensor on all non-bond legs. "
+            f"Found flattened row dimensions {pred_rest} and {d_rest}."
+        )
+        raise ValueError(errstr)
     if d_rest <= d_bond:
         # No orthogonal complement available.
         return None
@@ -118,7 +153,7 @@ def compute_enrichment_tensor(site_tensor: np.ndarray,
     if q_perp.shape[1] == 0:
         return None
 
-    projection = q_perp.conj().T @ ha_matrix
+    projection = q_perp.conj().T @ predictor_matrix
     if projection.size == 0:
         return None
 
@@ -135,4 +170,3 @@ def compute_enrichment_tensor(site_tensor: np.ndarray,
                                               original_shape=site_tensor.shape,
                                               bond_leg=bond_leg)
     return enrichment_tensor
-
